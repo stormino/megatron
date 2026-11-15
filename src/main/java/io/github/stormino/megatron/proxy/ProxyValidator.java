@@ -155,8 +155,10 @@ public final class ProxyValidator {
     boolean checkAlive(ProxyInfo proxy) {
         long t0 = System.nanoTime();
         Request req = new Request.Builder().url(settings.aliveUrl()).header("User-Agent", http.userAgent()).build();
+        // Timeouts are per phase (connect, read), not a cap on the whole call: free proxies are
+        // slow to tunnel and handshake, and a total cap rejected about half of the usable ones.
         try (Response resp = http.forProxy(proxy, settings.aliveTimeout(), settings.aliveTimeout(),
-                settings.aliveTimeout(), false).newCall(req).execute()) {
+                Duration.ZERO, false).newCall(req).execute()) {
             boolean ok = resp.code() >= 200 && resp.code() < 400;
             if (ok) {
                 proxy.latencyMs((int) ((System.nanoTime() - t0) / 1_000_000));
@@ -170,8 +172,10 @@ public final class ProxyValidator {
     boolean checkMega(ProxyInfo proxy) {
         Request req = new Request.Builder().url(settings.megaUrl()).header("User-Agent", http.userAgent()).build();
         try (Response ignored = http.forProxy(proxy, settings.megaTimeout(), settings.megaTimeout(),
-                settings.megaTimeout(), false).newCall(req).execute()) {
-            // Any response (even a Mega application error) proves the round trip reached Mega.
+                Duration.ZERO, false).newCall(req).execute()) {
+            // HTTPS: any response (even a Mega application error) proves the CONNECT tunnel works and
+            // the TLS certificate is Mega's. Do not switch this to plain HTTP: most free proxies
+            // answer plain requests with their own 4xx pages, which would count as false positives.
             return true;
         } catch (Exception e) {
             return false;

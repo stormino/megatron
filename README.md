@@ -18,7 +18,7 @@ It is a port of the ideas in
 - **Mega built in.** Parses public file and folder links, including legacy `#!`/`#F!` forms and
   folder links with a selected file or subfolder. Decrypts keys and attributes and expands shared
   folders recursively. It does not depend on any Mega SDK.
-- **Proxy harvesting.** Ships with 74 public proxy lists (HTTP, SOCKS5, SOCKS4) in several
+- **Proxy harvesting.** Ships with 66 public proxy lists (HTTP, SOCKS5, SOCKS4) in several
   formats. Candidates are checked in two stages (*can it connect at all?* then *can it reach
   Mega?*), with an optional third stage that measures real speed.
 - **Scored pool.** Each success raises a proxy's score and each failure lowers it. Proxies that
@@ -128,5 +128,6 @@ mvn test
 - The meta-MAC can't point to the bad chunk, so a mismatch means downloading the whole file again.
 - SOCKS4-only proxies usually fail validation, because the JDK SOCKS client cannot send hostnames
   over SOCKS4. The default sources therefore cover only HTTP and SOCKS5.
-- Free proxies die often. Most candidates are rejected during validation, and typical speeds per
-  proxy are tens to hundreds of KB/s.
+- Free proxies are poor. In a live test, about 35% of candidates answered at all, and under 1% of
+  those could open an HTTPS tunnel to Mega (most refuse `CONNECT` or require a login). Expect a pool
+  of tens of proxies from 12,000 candidates. That was still enough for 165 MB at up to 7 MB/s.
