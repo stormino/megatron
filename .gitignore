@@ -1,0 +1,8 @@
+target/
+*.iml
+.idea/
+.vscode/
+downloads/
+*.part
+*.progress.json
+dependency-reduced-pom.xml
