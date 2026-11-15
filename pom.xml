@@ -43,7 +43,7 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <okhttp.version>4.12.0</okhttp.version>
-        <jackson.version>2.17.2</jackson.version>
+        <jackson.version>2.23.0</jackson.version>
         <jsoup.version>1.17.2</jsoup.version>
         <slf4j.version>2.0.13</slf4j.version>
         <junit.version>5.10.2</junit.version>
