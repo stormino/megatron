@@ -38,6 +38,10 @@ public final class MegatronCli {
                 case "--cache" -> cache = Path.of(args[++i]);
                 case "--no-cache" -> cache = null;
                 case "--direct-resolve" -> settings.resolveViaProxy(false);
+                case "-V", "--version" -> {
+                    System.out.println("megatron " + Megatron.version());
+                    return;
+                }
                 case "-h", "--help" -> {
                     usage();
                     return;
@@ -91,7 +95,8 @@ public final class MegatronCli {
                       --proxies FILE     use this proxy list (host:port or scheme://host:port per line)
                       --cache FILE       proxy cache file (default: megatron-proxy-cache.json)
                       --no-cache         do not read or write a proxy cache
-                      --direct-resolve   resolve links without a proxy""");
+                      --direct-resolve   resolve links without a proxy
+                  -V, --version          print the version""");
     }
 
     static String human(double bytes) {

@@ -1,0 +1,112 @@
+name: Release
+
+# Cuts a release from main:
+#   1. sets the pom to X.Y.Z, runs the full build and tests
+#   2. publishes X.Y.Z to GitHub Packages
+#   3. commits "Release X.Y.Z", tags vX.Y.Z, creates the GitHub Release (notes + jars)
+#   4. moves main to the next -SNAPSHOT version
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (X.Y.Z). Leave empty to release the current snapshot version.'
+        required: false
+        type: string
+      next_version:
+        description: 'Next development version without -SNAPSHOT (default: next patch).'
+        required: false
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: github
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve versions
+        id: versions
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_NEXT: ${{ inputs.next_version }}
+        run: |
+          CURRENT=$(mvn -B -q -ntp help:evaluate -Dexpression=project.version -DforceStdout)
+          VERSION="${INPUT_VERSION:-${CURRENT%-SNAPSHOT}}"
+          VERSION="${VERSION#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must be X.Y.Z, got '$VERSION'"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists"
+            exit 1
+          fi
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEXT="${INPUT_NEXT:-$MAJOR.$MINOR.$((PATCH + 1))}"
+          NEXT="${NEXT%-SNAPSHOT}"
+          if ! [[ "$NEXT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Next version must be X.Y.Z, got '$NEXT'"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT-SNAPSHOT" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (was $CURRENT), next development version $NEXT-SNAPSHOT"
+
+      - name: Set release version
+        run: mvn -B -ntp versions:set -DgenerateBackupFiles=false -DnewVersion=${{ steps.versions.outputs.version }}
+
+      - name: Build and test
+        run: mvn -B -ntp -Pcli verify
+
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mvn -B -ntp -DskipTests deploy
+
+      - name: Commit and tag release
+        run: |
+          git commit -am "Release ${{ steps.versions.outputs.version }}"
+          git tag -a "v${{ steps.versions.outputs.version }}" -m "Release ${{ steps.versions.outputs.version }}"
+          git push origin HEAD:main "v${{ steps.versions.outputs.version }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V=${{ steps.versions.outputs.version }}
+          gh release create "v$V" --verify-tag --generate-notes --title "Megatron $V" \
+            "target/megatron-$V.jar" \
+            "target/megatron-$V-cli.jar" \
+            "target/megatron-$V-sources.jar" \
+            "target/megatron-$V-javadoc.jar"
+
+      - name: Prepare next development version
+        run: |
+          mvn -B -ntp versions:set -DgenerateBackupFiles=false -DnewVersion=${{ steps.versions.outputs.next }}
+          git commit -am "Prepare for next development iteration (${{ steps.versions.outputs.next }})"
+          git push origin HEAD:main

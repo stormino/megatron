@@ -6,3 +6,4 @@ downloads/
 *.part
 *.progress.json
 dependency-reduced-pom.xml
+pom.xml.versionsBackup

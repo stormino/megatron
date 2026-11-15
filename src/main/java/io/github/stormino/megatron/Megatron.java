@@ -104,6 +104,12 @@ public final class Megatron implements AutoCloseable {
         return new Builder();
     }
 
+    /** Library version from the jar manifest, or {@code "dev"} when running from classes (IDE, tests). */
+    public static String version() {
+        String v = Megatron.class.getPackage().getImplementationVersion();
+        return v == null ? "dev" : v;
+    }
+
     public ProxyPool pool() {
         return pool;
     }

@@ -41,6 +41,30 @@ It is a port of the ideas in
   - Each file is retried as a whole a limited number of times.
 - **Control:** pause, resume and cancel, plus listener callbacks for progress, chunks and results.
 
+## Installation
+
+Releases are published to GitHub Packages and attached to each
+[GitHub Release](https://github.com/stormino/megatron/releases): the library jar, a runnable CLI
+jar, sources and javadoc.
+
+```xml
+<repositories>
+    <repository>
+        <id>github</id>
+        <url>https://maven.pkg.github.com/stormino/megatron</url>
+    </repository>
+</repositories>
+
+<dependency>
+    <groupId>io.github.stormino</groupId>
+    <artifactId>megatron</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+GitHub Packages requires authentication even for public packages. Add a `github` server with
+your username and a token that has the `read:packages` scope to `~/.m2/settings.xml`.
+
 ## Usage
 
 ```java
@@ -110,8 +134,37 @@ java -jar target/megatron-0.1.0-SNAPSHOT-cli.jar --help
 ## Build
 
 ```bash
-mvn test
+mvn verify          # build + tests
+mvn -Pcli verify    # also the runnable CLI jar
 ```
+
+## Versioning and releases
+
+The project follows [Semantic Versioning](https://semver.org). `main` always carries the next
+version with `-SNAPSHOT`. Only the **Release** workflow produces release versions.
+
+- **CI** (`.github/workflows/ci.yml`) builds and tests every pull request and every push to `main`.
+  Each push to `main` also publishes the current `-SNAPSHOT` to GitHub Packages.
+- **Release** (`.github/workflows/release.yml`) is started by hand from the Actions tab on `main`,
+  or with `gh workflow run release.yml -f version=X.Y.Z`. It:
+  1. sets the pom to `X.Y.Z` and runs the full build and tests;
+  2. publishes `X.Y.Z` to GitHub Packages;
+  3. commits `Release X.Y.Z`, tags `vX.Y.Z` and creates the GitHub Release, with notes generated
+     from merged pull requests and the jars attached;
+  4. moves `main` to the next `-SNAPSHOT` version (the next patch by default; `next_version`
+     overrides it).
+
+  If `version` is left empty, it releases the current snapshot version. Release notes group pull
+  requests by label (`breaking`, `enhancement`, `bug`, `dependencies`, ...), as configured in
+  `.github/release.yml`.
+- **Dependabot** opens weekly pull requests for Maven dependencies and GitHub Actions.
+
+Which number to bump:
+- **major**: breaking change to the public API;
+- **minor**: new backwards-compatible feature;
+- **patch**: bug fix.
+
+While the version is `0.x`, minor releases may still break the API.
 
 ## Package map
 
