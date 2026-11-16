@@ -175,7 +175,7 @@ version with `-SNAPSHOT`. Only the **Release** workflow produces release version
   path. It uploads a throwaway `0.0.0-check.N` version, waits for Central's validation and drops
   it without publishing. Run it after changing the pom, the signing key or the credentials.
 - Secrets: `CENTRAL_USERNAME`/`CENTRAL_PASSWORD` (Central Portal user token), `GPG_PRIVATE_KEY`
-  and `GPG_PASSPHRASE` (release signing key `ED0D48F25BE7A84B3CD7D3DB6DE5157A27DCA36A`).
+  and `GPG_PASSPHRASE` (release signing key `5286EA87694CD48A17B69D7279F90E229AB978F1`).
 - **Dependabot** opens weekly pull requests for Maven dependencies and GitHub Actions.
 
 Which number to bump:
