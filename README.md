@@ -49,27 +49,34 @@ It is a port of the ideas in
 
 ## Installation
 
-Releases are published to GitHub Packages and attached to each
-[GitHub Release](https://github.com/stormino/megatron/releases): the library jar, a runnable CLI
-jar, sources and javadoc.
+From 1.0.0, releases are on **Maven Central**, so no repository or token is needed:
+
+```xml
+<dependency>
+    <groupId>io.github.stormino</groupId>
+    <artifactId>megatron</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+Each [GitHub Release](https://github.com/stormino/megatron/releases) also carries the library jar,
+a runnable CLI jar, sources and javadoc.
+
+Development snapshots (`X.Y.Z-SNAPSHOT`, one per push to `main`) are published to GitHub Packages
+only. To use one, add the repository below plus a `github` server in `~/.m2/settings.xml` with your
+username and a token that has the `read:packages` scope (GitHub Packages requires one even for
+public packages):
 
 ```xml
 <repositories>
     <repository>
         <id>github</id>
         <url>https://maven.pkg.github.com/stormino/megatron</url>
+        <releases><enabled>false</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
     </repository>
 </repositories>
-
-<dependency>
-    <groupId>io.github.stormino</groupId>
-    <artifactId>megatron</artifactId>
-    <version>0.1.0</version>
-</dependency>
 ```
-
-GitHub Packages requires authentication even for public packages. Add a `github` server with
-your username and a token that has the `read:packages` scope to `~/.m2/settings.xml`.
 
 ## Usage
 
@@ -133,8 +140,8 @@ The lower-level pieces can also be used on their own: `MegaApiClient`, `FolderEx
 
 ```bash
 mvn -Pcli package
-java -jar target/megatron-0.1.0-SNAPSHOT-cli.jar -o downloads "https://mega.nz/file/XXXX#YYYY"
-java -jar target/megatron-0.1.0-SNAPSHOT-cli.jar --help
+java -jar target/megatron-*-cli.jar -o downloads "https://mega.nz/file/XXXX#YYYY"
+java -jar target/megatron-*-cli.jar --help
 ```
 
 ## Build
@@ -154,7 +161,8 @@ version with `-SNAPSHOT`. Only the **Release** workflow produces release version
 - **Release** (`.github/workflows/release.yml`) is started by hand from the Actions tab on `main`,
   or with `gh workflow run release.yml -f version=X.Y.Z`. It:
   1. sets the pom to `X.Y.Z` and runs the full build and tests;
-  2. publishes `X.Y.Z` to GitHub Packages;
+  2. signs `X.Y.Z` with the release GPG key and publishes it to Maven Central, waiting until
+     Central has validated and published it (releases on Central are permanent);
   3. commits `Release X.Y.Z`, tags `vX.Y.Z` and creates the GitHub Release, with notes generated
      from merged pull requests and the jars attached;
   4. moves `main` to the next `-SNAPSHOT` version (the next patch by default; `next_version`
@@ -163,6 +171,11 @@ version with `-SNAPSHOT`. Only the **Release** workflow produces release version
   If `version` is left empty, it releases the current snapshot version. Release notes group pull
   requests by label (`breaking`, `enhancement`, `bug`, `dependencies`, ...), as configured in
   `.github/release.yml`.
+- **Central check** (`.github/workflows/central-check.yml`) is a manual dry run of the Central
+  path. It uploads a throwaway `0.0.0-check.N` version, waits for Central's validation and drops
+  it without publishing. Run it after changing the pom, the signing key or the credentials.
+- Secrets: `CENTRAL_USERNAME`/`CENTRAL_PASSWORD` (Central Portal user token), `GPG_PRIVATE_KEY`
+  and `GPG_PASSPHRASE` (release signing key `ED0D48F25BE7A84B3CD7D3DB6DE5157A27DCA36A`).
 - **Dependabot** opens weekly pull requests for Maven dependencies and GitHub Actions.
 
 Which number to bump:
@@ -189,3 +202,9 @@ While the version is `0.x`, minor releases may still break the API.
 - Free proxies are poor. In a live test, about 35% of candidates answered at all, and under 1% of
   those could open an HTTPS tunnel to Mega (most refuse `CONNECT` or require a login). Expect a pool
   of tens of proxies from 12,000 candidates. That was still enough for 165 MB at up to 7 MB/s.
+
+## License
+
+[MIT](LICENSE). Portions derive from
+[mega-downloader-proxy-rotator](https://github.com/SuperPHaze/mega-downloader-proxy-rotator)
+(MIT, © SuperPHaze).

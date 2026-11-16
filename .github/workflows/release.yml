@@ -2,7 +2,7 @@ name: Release
 
 # Cuts a release from main:
 #   1. sets the pom to X.Y.Z, runs the full build and tests
-#   2. publishes X.Y.Z to GitHub Packages
+#   2. signs X.Y.Z and publishes it to Maven Central (snapshots stay on GitHub Packages, see ci.yml)
 #   3. commits "Release X.Y.Z", tags vX.Y.Z, creates the GitHub Release (notes + jars)
 #   4. moves main to the next -SNAPSHOT version
 on:
@@ -27,7 +27,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
-      packages: write
 
     steps:
       - name: Checkout repository
@@ -42,7 +41,11 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          server-id: github
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Configure Git
         run: |
@@ -83,10 +86,14 @@ jobs:
       - name: Build and test
         run: mvn -B -ntp -Pcli verify
 
-      - name: Publish to GitHub Packages
+      # Waits until Central has validated and published the release (a few minutes). Releases on
+      # Central are permanent, so nothing is committed or tagged unless this succeeds.
+      - name: Publish to Maven Central
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mvn -B -ntp -DskipTests deploy
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -ntp -Pcentral -DskipTests deploy
 
       - name: Commit and tag release
         run: |
