@@ -1,9 +1,13 @@
 package io.github.stormino.megatron.proxy;
 
 /**
- * Proxy protocol. SOCKS proxies are reached through the JDK's SOCKS client, which negotiates
- * SOCKS5 and resolves host names on the proxy side; SOCKS4-only servers usually fail validation
- * because SOCKS4 cannot carry unresolved host names.
+ * Proxy protocol.
+ * <ul>
+ *   <li>{@link #HTTP}: plain HTTP proxy, HTTPS through {@code CONNECT}.</li>
+ *   <li>{@link #SOCKS5}: the JDK's SOCKS client; host names are resolved by the proxy.</li>
+ *   <li>{@link #SOCKS4}: the library's own client ({@code Socks4SocketFactory}); targets are
+ *       resolved locally to IPv4, since SOCKS4 carries neither host names nor IPv6.</li>
+ * </ul>
  */
 public enum ProxyProtocol {
     HTTP,
