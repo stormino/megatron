@@ -1,6 +1,7 @@
 package io.github.stormino.megatron.download;
 
 import io.github.stormino.megatron.BatchResult;
+import io.github.stormino.megatron.LinkInfo;
 import io.github.stormino.megatron.Megatron;
 import io.github.stormino.megatron.mega.FolderExpanderTest;
 import io.github.stormino.megatron.mega.MegaApiException;
@@ -204,5 +205,76 @@ class ParallelDownloaderTest {
         assertArrayEquals(plains[3], Files.readAllBytes(dir.resolve("Share/A (2).TXT")));
         assertArrayEquals(plains[2], Files.readAllBytes(dir.resolve("Share/Sub/b.txt")));
         assertArrayEquals(plains[4], Files.readAllBytes(dir.resolve("Share/Sub/multi.bin")));
+    }
+
+    @Test
+    void resolveDescribesAFileWithoutDownloading() throws Exception {
+        var f = mega.addFile("InFo", "movie.mkv", 2 * MIB + 5, 7);
+        try (Megatron m = megatron(8, 1).build()) {
+            assertFalse(m.isReady());
+            LinkInfo info = m.resolve(f.link());
+            assertFalse(info.folder());
+            assertEquals("movie.mkv", info.name());
+            assertEquals(1, info.files().size());
+            assertEquals(f.link(), info.files().get(0).url());
+            assertEquals(2 * MIB + 5, info.totalBytes());
+            assertTrue(info.files().get(0).folders().isEmpty());
+            assertTrue(m.isReady(), "resolving through proxies warms the pool up");
+        }
+        assertTrue(mega.cdnRanges.isEmpty(), "resolve must not touch the CDN");
+        assertTrue(Megatron.isMegaLink(f.link()));
+        assertFalse(Megatron.isMegaLink("https://example.com/movie.mkv"));
+        assertFalse(Megatron.isMegaLink(null));
+    }
+
+    @Test
+    void resolveListsAFolderAndItsEntriesAreDownloadable() throws Exception {
+        String[] handles = {null, "F1", "F2", "F3", "F4"};
+        byte[][] plains = new byte[5][];
+        int[][] keys = new int[5][];
+        for (int i = 1; i <= 4; i++) {
+            plains[i] = new byte[1000 * i + 7];
+            new java.util.Random(i).nextBytes(plains[i]);
+            keys[i] = FakeMega.keyFor(plains[i], i);
+            mega.files.put(handles[i], new FakeMega.StoredFile(handles[i], keys[i], "ignored", plains[i],
+                    FakeMega.encrypt(keys[i], plains[i])));
+        }
+        var listing = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        listing.putArray("f").addAll(FolderExpanderTest.sampleNodes(keys));
+        mega.folders.put("ROOT", listing);
+        String master = io.github.stormino.megatron.mega.MegaCrypto.a32ToBase64(FolderExpanderTest.MASTER);
+        try (Megatron m = megatron(8, 1).build()) {
+            LinkInfo info = m.resolve("https://mega.nz/folder/ROOT#" + master);
+            assertTrue(info.folder());
+            assertEquals("Share", info.name());
+            assertEquals(4, info.files().size());
+            assertEquals(0, info.truncated());
+            var sub = info.files().stream().filter(e -> e.fileName().equals("b.txt")).findFirst().orElseThrow();
+            assertEquals(List.of("Share", "Sub"), sub.folders());
+            DownloadResult r = m.download(sub.url(), dir, "renamed.txt", DownloadListener.NONE, new DownloadControl());
+            assertEquals(dir.resolve("renamed.txt"), r.path());
+            assertArrayEquals(plains[2], Files.readAllBytes(r.path()));
+        }
+    }
+
+    @Test
+    void downloadsUnderACustomFileName() throws Exception {
+        var f = mega.addFile("ReNaMe", "Some.Movie.2024.1080p.mkv", MIB + 3, 9);
+        java.util.concurrent.atomic.AtomicReference<Path> target = new java.util.concurrent.atomic.AtomicReference<>();
+        DownloadListener listener = new DownloadListener() {
+            @Override
+            public void onResolved(String url, String fileName, long size, Path t) {
+                target.set(t);
+            }
+        };
+        try (Megatron m = megatron(8, 1).build()) {
+            DownloadResult r = m.download(f.link(), dir, "Some Movie (2024).mkv", listener, new DownloadControl());
+            assertEquals(dir.resolve("Some Movie (2024).mkv"), r.path());
+            assertEquals(r.path(), target.get());
+            assertArrayEquals(f.plain(), Files.readAllBytes(r.path()));
+            // Path separators cannot escape the output directory.
+            DownloadResult r2 = m.download(f.link(), dir, "../escape.mkv", DownloadListener.NONE, new DownloadControl());
+            assertEquals(dir, r2.path().getParent());
+        }
     }
 }

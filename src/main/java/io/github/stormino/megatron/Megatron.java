@@ -13,6 +13,7 @@ import io.github.stormino.megatron.mega.FolderExpander;
 import io.github.stormino.megatron.mega.MegaApiClient;
 import io.github.stormino.megatron.mega.MegaApiException;
 import io.github.stormino.megatron.mega.MegaLinks;
+import io.github.stormino.megatron.mega.ResolvedFile;
 import io.github.stormino.megatron.proxy.PoolRefresher;
 import io.github.stormino.megatron.proxy.ProxyCache;
 import io.github.stormino.megatron.proxy.ProxyHarvester;
@@ -73,6 +74,7 @@ public final class Megatron implements AutoCloseable {
     private final int maxFolderFiles;
     private final Object warmUpLock = new Object();
     private volatile boolean warmedUp;
+    private volatile boolean warmingUp;
     private volatile boolean closed;
 
     private Megatron(Builder b) {
@@ -117,6 +119,21 @@ public final class Megatron implements AutoCloseable {
         return downloadSettings;
     }
 
+    /** {@code true} once {@link #warmUp()} has completed: downloads start without waiting for the pool. */
+    public boolean isReady() {
+        return warmedUp && !closed;
+    }
+
+    /** {@code true} while {@link #warmUp()} is filling the pool (scraping and validating proxies). */
+    public boolean isWarmingUp() {
+        return warmingUp;
+    }
+
+    /** {@code true} if {@code url} is a Mega file, folder or folder-job link this library understands. */
+    public static boolean isMegaLink(String url) {
+        return url != null && (MegaLinks.isFolderLink(url) || MegaLinks.isDownloadable(url));
+    }
+
     /**
      * Fills the pool (static proxies, or cache + scrape + validate) and starts the refresher.
      * Called automatically by the first download; call it explicitly to pay the cost up front.
@@ -127,25 +144,62 @@ public final class Megatron implements AutoCloseable {
             if (warmedUp) {
                 return;
             }
-            if (!staticProxies.isEmpty()) {
-                pool.addAll(staticProxies);
-            } else {
-                if (cache != null) {
-                    List<ProxyInfo> cached = cache.load();
-                    if (!cached.isEmpty()) {
-                        pool.addAll(validator.validate(cached));
-                    }
-                }
-                if (pool.size() == 0) {
-                    pool.refillBlocking(false);
-                }
-                if (refresher != null) {
-                    refresher.start();
-                }
+            warmingUp = true;
+            try {
+                fillPool();
+            } finally {
+                warmingUp = false;
             }
             warmedUp = true;
             log.info("Megatron ready: {} proxies alive, {} distinct exit IPs", pool.proxyCount(), pool.size());
         }
+    }
+
+    private void fillPool() {
+        if (!staticProxies.isEmpty()) {
+            pool.addAll(staticProxies);
+            return;
+        }
+        if (cache != null) {
+            List<ProxyInfo> cached = cache.load();
+            if (!cached.isEmpty()) {
+                pool.addAll(validator.validate(cached));
+            }
+        }
+        if (pool.size() == 0) {
+            pool.refillBlocking(false);
+        }
+        if (refresher != null) {
+            refresher.start();
+        }
+    }
+
+    // ------------------------------------------------------------------ resolve
+
+    /**
+     * Describes a file or folder link without downloading it: names, sizes and, for folders, the
+     * tree of files. Mega API calls go through the pool when {@link DownloadSettings#resolveViaProxy()}
+     * is set (which warms the pool up first), directly otherwise.
+     *
+     * @throws MegaApiException if the link is not a Mega link or Mega refused it
+     */
+    public LinkInfo resolve(String url) {
+        ensureOpen();
+        if (MegaLinks.isFolderLink(url)) {
+            FolderExpander.FolderExpansion exp = expandFolder(url);
+            List<LinkInfo.Entry> entries = exp.files().stream()
+                    .map(f -> new LinkInfo.Entry(f.jobUrl(), f.fileName(), f.size(),
+                            f.relPath().subList(0, f.relPath().size() - 1)))
+                    .toList();
+            return new LinkInfo(url, true, exp.folderName(), entries, exp.totalFiles());
+        }
+        if (!MegaLinks.isDownloadable(url)) {
+            throw new MegaApiException("Not a Mega link: " + url);
+        }
+        MegaApiClient resolver = api;
+        ResolvedFile f = withProxyRotation(proxy -> resolver.resolve(url, proxy));
+        return new LinkInfo(url, false, f.fileName(),
+                List.of(new LinkInfo.Entry(url, f.fileName(), f.size(), List.of())), 1);
     }
 
     // ------------------------------------------------------------------ single file
@@ -159,13 +213,23 @@ public final class Megatron implements AutoCloseable {
      * to {@code fileAttempts} times; each retry resumes from the chunks already on disk.
      */
     public DownloadResult download(String url, Path outputDir, DownloadListener listener, DownloadControl control) {
+        return download(url, outputDir, null, listener, control);
+    }
+
+    /**
+     * Like {@link #download(String, Path, DownloadListener, DownloadControl)}, saving the file as
+     * {@code fileName} inside {@code outputDir} instead of the name stored on Mega ({@code null}
+     * keeps Mega's name). The name is sanitized; path separators are not allowed.
+     */
+    public DownloadResult download(String url, Path outputDir, String fileName, DownloadListener listener,
+                                   DownloadControl control) {
         warmUp();
         DownloadListener l = listener == null ? DownloadListener.NONE : listener;
         DownloadControl c = control == null ? new DownloadControl() : control;
         RuntimeException last = null;
         for (int attempt = 1; attempt <= fileAttempts; attempt++) {
             try {
-                DownloadResult r = downloader.download(url, outputDir, l, c);
+                DownloadResult r = downloader.download(url, outputDir, fileName, l, c);
                 l.onCompleted(r);
                 return r;
             } catch (DownloadCancelledException e) {
@@ -192,7 +256,6 @@ public final class Megatron implements AutoCloseable {
     public FolderExpander.FolderExpansion expandFolder(String folderUrl) {
         MegaLinks.FolderLink link = MegaLinks.parseFolder(folderUrl)
                 .orElseThrow(() -> new MegaApiException("Not a Mega folder link: " + folderUrl));
-        warmUp();
         MegaApiClient lister = api.withTimeout(Duration.ofSeconds(60));
         List<JsonNode> nodes = withProxyRotation(proxy -> lister.listFolder(link.folderId(), proxy));
         return FolderExpander.expand(link, nodes, maxFolderFiles);
@@ -269,6 +332,7 @@ public final class Megatron implements AutoCloseable {
         if (!downloadSettings.resolveViaProxy()) {
             return call.apply(null);
         }
+        warmUp();
         RuntimeException last = null;
         for (int i = 0; i < downloadSettings.resolveAttempts(); i++) {
             ProxyInfo proxy = pool.next();
