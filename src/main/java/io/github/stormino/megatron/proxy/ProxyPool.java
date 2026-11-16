@@ -24,8 +24,13 @@ import java.util.function.Supplier;
  *   <li>{@link SelectionMode#SCORE}: round-robin over the top-score tier, latency as tiebreaker.</li>
  *   <li>{@link SelectionMode#THROUGHPUT}: round-robin over the top-K proxies by observed throughput
  *       (EMA), with one slot reserved to explore unmeasured proxies.</li>
- *   <li>{@link #cooldown} benches a proxy for a while (CDN rate-limit) without touching its score;
- *       benched proxies do not count as alive, so an all-benched pool still triggers refills.</li>
+ *   <li>Proxies sharing an exit IP ({@link ProxyInfo#exitIp()}) form one group: Mega's quota is per
+ *       IP, so selection first picks one representative per group (rotating among its members) and
+ *       then applies the mode below across groups, spreading chunks over distinct exit IPs.</li>
+ *   <li>{@link #cooldown} benches a proxy's whole exit group for a while (CDN rate-limit) without
+ *       touching scores; benched groups do not count as alive, so an all-benched pool still
+ *       triggers refills.</li>
+ *   <li>{@link #size()} counts distinct alive exit IPs; {@link #proxyCount()} counts proxies.</li>
  *   <li>{@link #refillBlocking} serialises refills: the first caller scrapes and validates, the
  *       others wait and then find the pool already populated.</li>
  * </ul>
@@ -54,7 +59,9 @@ public final class ProxyPool {
     private final Map<String, Integer> score = new HashMap<>();
     private final Map<String, Integer> latency = new HashMap<>();
     private final Map<String, Double> throughput = new HashMap<>();
+    /** Keyed by {@link ProxyInfo#exitKey()}: a rate limit hits every proxy behind the same exit. */
     private final Map<String, Long> cooldownUntil = new HashMap<>();
+    private final Map<String, Integer> groupIndex = new HashMap<>();
     private int index;
 
     private volatile Supplier<List<ProxyInfo>> refillFunction;
@@ -154,7 +161,7 @@ public final class ProxyPool {
     public ProxyInfo next() {
         lock.lock();
         try {
-            List<ProxyInfo> eligible = eligibleLocked();
+            List<ProxyInfo> eligible = groupRepresentativesLocked(eligibleLocked());
             if (eligible.isEmpty()) {
                 return null;
             }
@@ -174,18 +181,50 @@ public final class ProxyPool {
         long now = clock.getAsLong();
         List<ProxyInfo> out = new ArrayList<>();
         for (ProxyInfo p : proxies.values()) {
-            if (isAliveLocked(p.key(), now)) {
+            if (isAliveLocked(p, now)) {
                 out.add(p);
             }
         }
         return out;
     }
 
-    private boolean isAliveLocked(String key, long now) {
-        if (score.getOrDefault(key, settings.initialScore()) <= settings.deadThreshold()) {
+    /**
+     * One proxy per exit group: among the group's best-scored members, rotate so the load (and the
+     * chance to notice dead front ends) is spread inside the group too.
+     */
+    private List<ProxyInfo> groupRepresentativesLocked(List<ProxyInfo> eligible) {
+        Map<String, List<ProxyInfo>> groups = new LinkedHashMap<>();
+        for (ProxyInfo p : eligible) {
+            groups.computeIfAbsent(p.exitKey(), k -> new ArrayList<>()).add(p);
+        }
+        List<ProxyInfo> out = new ArrayList<>(groups.size());
+        for (var e : groups.entrySet()) {
+            List<ProxyInfo> members = e.getValue();
+            if (members.size() == 1) {
+                out.add(members.get(0));
+                continue;
+            }
+            int best = Integer.MIN_VALUE;
+            for (ProxyInfo p : members) {
+                best = Math.max(best, score.getOrDefault(p.key(), settings.initialScore()));
+            }
+            List<ProxyInfo> top = new ArrayList<>();
+            for (ProxyInfo p : members) {
+                if (score.getOrDefault(p.key(), settings.initialScore()) == best) {
+                    top.add(p);
+                }
+            }
+            int i = groupIndex.merge(e.getKey(), 1, Integer::sum) - 1;
+            out.add(top.get(Math.floorMod(i, top.size())));
+        }
+        return out;
+    }
+
+    private boolean isAliveLocked(ProxyInfo p, long now) {
+        if (score.getOrDefault(p.key(), settings.initialScore()) <= settings.deadThreshold()) {
             return false;
         }
-        Long until = cooldownUntil.get(key);
+        Long until = cooldownUntil.get(p.exitKey());
         return until == null || until - now <= 0;
     }
 
@@ -290,11 +329,15 @@ public final class ProxyPool {
         cooldown(proxy, settings.cooldown());
     }
 
-    /** Benches the proxy for {@code duration} without touching its score. */
+    /**
+     * Benches the proxy's whole exit group for {@code duration} without touching scores: the CDN
+     * rate limit is per IP, so every proxy behind the same exit is limited too.
+     */
     public void cooldown(ProxyInfo proxy, Duration duration) {
         lock.lock();
         try {
-            cooldownUntil.put(proxy.key(), clock.getAsLong() + duration.toNanos());
+            ProxyInfo known = proxies.getOrDefault(proxy.key(), proxy);
+            cooldownUntil.put(known.exitKey(), clock.getAsLong() + duration.toNanos());
         } finally {
             lock.unlock();
         }
@@ -303,7 +346,10 @@ public final class ProxyPool {
 
     // ---------------------------------------------------------------- stats
 
-    /** Number of proxies currently selectable (alive and not in cooldown). */
+    /**
+     * Number of distinct exit IPs currently selectable (alive and not in cooldown). This is the
+     * pool's real diversity as Mega sees it; proxies with an unknown exit count individually.
+     */
     public int size() {
         lock.lock();
         try {
@@ -313,15 +359,25 @@ public final class ProxyPool {
         }
     }
 
+    /** Number of individual proxies currently selectable. */
+    public int proxyCount() {
+        lock.lock();
+        try {
+            return eligibleLocked().size();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private int countAliveLocked() {
         long now = clock.getAsLong();
-        int n = 0;
-        for (String key : proxies.keySet()) {
-            if (isAliveLocked(key, now)) {
-                n++;
+        java.util.Set<String> exits = new java.util.HashSet<>();
+        for (ProxyInfo p : proxies.values()) {
+            if (isAliveLocked(p, now)) {
+                exits.add(p.exitKey());
             }
         }
-        return n;
+        return exits.size();
     }
 
     public int cooldownCount() {
@@ -385,6 +441,7 @@ public final class ProxyPool {
                 ProxyInfo copy = new ProxyInfo(p.host(), p.port(), p.protocol(), p.username(), p.password(), "cache");
                 copy.cachedScore(s);
                 copy.latencyMs(latency.get(p.key()));
+                copy.exitIp(p.exitIp());
                 out.add(copy);
             }
             return out;

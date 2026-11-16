@@ -20,7 +20,13 @@ It is a port of the ideas in
   folders recursively. It does not depend on any Mega SDK.
 - **Proxy harvesting.** Ships with 66 public proxy lists (HTTP, SOCKS5, SOCKS4) in several
   formats. Candidates are checked in two stages (*can it connect at all?* then *can it reach
-  Mega?*), with an optional third stage that measures real speed.
+  Mega?*), with an optional third stage that measures real speed. SOCKS4 uses a built-in client,
+  because the JDK's own SOCKS client cannot handle it.
+- **Exit-IP awareness.** Free lists are full of proxies that are different addresses on the
+  outside but leave from the same IP. In one live test, thousands of SOCKS4 entries shared a single
+  exit. Validation measures each proxy's real exit IP, and drops proxies that would expose your own
+  IP. The pool treats proxies sharing an exit as one, because Mega's quota is per IP: rotation spreads
+  chunks across distinct exits, and a rate limit benches the whole group.
 - **Scored pool.** Each success raises a proxy's score and each failure lowers it. Proxies that
   fall too low are dropped. When the CDN rate-limits a proxy (403/509), the proxy is benched for a
   while instead of being killed. A background refresher refills the pool, with hysteresis so it
@@ -179,8 +185,7 @@ While the version is `0.x`, minor releases may still break the API.
 ## Known limitations
 
 - The meta-MAC can't point to the bad chunk, so a mismatch means downloading the whole file again.
-- SOCKS4-only proxies usually fail validation, because the JDK SOCKS client cannot send hostnames
-  over SOCKS4. The default sources therefore cover only HTTP and SOCKS5.
+- SOCKS4 can only reach IPv4 addresses, so targets are resolved locally to IPv4 for SOCKS4 proxies.
 - Free proxies are poor. In a live test, about 35% of candidates answered at all, and under 1% of
   those could open an HTTPS tunnel to Mega (most refuse `CONNECT` or require a login). Expect a pool
   of tens of proxies from 12,000 candidates. That was still enough for 165 MB at up to 7 MB/s.

@@ -18,7 +18,6 @@ import io.github.stormino.megatron.proxy.ProxyCache;
 import io.github.stormino.megatron.proxy.ProxyHarvester;
 import io.github.stormino.megatron.proxy.ProxyInfo;
 import io.github.stormino.megatron.proxy.ProxyPool;
-import io.github.stormino.megatron.proxy.ProxyProtocol;
 import io.github.stormino.megatron.proxy.ProxyScraper;
 import io.github.stormino.megatron.proxy.ProxySource;
 import io.github.stormino.megatron.proxy.ProxySources;
@@ -145,7 +144,7 @@ public final class Megatron implements AutoCloseable {
                 }
             }
             warmedUp = true;
-            log.info("Megatron ready: {} proxies alive", pool.size());
+            log.info("Megatron ready: {} proxies alive, {} distinct exit IPs", pool.proxyCount(), pool.size());
         }
     }
 
@@ -317,7 +316,7 @@ public final class Megatron implements AutoCloseable {
 
     /** Configuration of a {@link Megatron} instance. */
     public static final class Builder {
-        private List<ProxySource> sources = ProxySources.defaults(ProxyProtocol.HTTP, ProxyProtocol.SOCKS5);
+        private List<ProxySource> sources = ProxySources.defaults();
         private final List<ProxyInfo> staticProxies = new ArrayList<>();
         private Path cacheFile;
         private Duration cacheTtl = Duration.ofHours(6);
@@ -334,7 +333,7 @@ public final class Megatron implements AutoCloseable {
         private String userAgent = HttpClientFactory.DEFAULT_USER_AGENT;
         private String apiUrl = MegaApiClient.DEFAULT_API_URL;
 
-        /** Proxy lists to scrape (default: built-in HTTP and SOCKS5 lists). */
+        /** Proxy lists to scrape (default: all built-in HTTP, SOCKS5 and SOCKS4 lists). */
         public Builder sources(List<ProxySource> sources) {
             this.sources = List.copyOf(sources);
             return this;

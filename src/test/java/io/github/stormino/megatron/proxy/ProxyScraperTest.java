@@ -66,6 +66,7 @@ class ProxyScraperTest {
     @Test
     void defaultsCatalogue() {
         assertEquals(66, ProxySources.defaults().size());
+        assertEquals(6, ProxySources.defaults(ProxyProtocol.SOCKS4).size());
         ProxySources.defaults(ProxyProtocol.SOCKS4).forEach(s -> assertEquals(ProxyProtocol.SOCKS4, s.protocol()));
     }
 }
