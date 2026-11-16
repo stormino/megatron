@@ -99,6 +99,22 @@ The first call fills the pool by scraping and validating proxies, which can take
 Call `megatron.warmUp()` to do that up front, and pass
 `Megatron.Builder.validationProgress(...)` to watch it.
 
+### Inspecting a link and naming the file
+
+```java
+LinkInfo info = megatron.resolve("https://mega.nz/folder/AAAA#BBBB");   // nothing is downloaded
+for (LinkInfo.Entry e : info.files()) {
+    System.out.printf("%s/%s %d bytes%n", String.join("/", e.folders()), e.fileName(), e.size());
+}
+LinkInfo.Entry first = info.files().get(0);
+megatron.download(first.url(), Path.of("downloads"), "My Movie (2024).mkv", listener, control);
+```
+
+`resolve` only calls the Mega API. With `resolveViaProxy(false)` it needs no proxies at all, so it
+answers right away even while the pool is still empty. `isReady()` and `isWarmingUp()` tell
+whether downloads can start without waiting for `warmUp()`; `Megatron.isMegaLink(url)` checks a
+URL without network access.
+
 ### Your own proxies
 
 ```java

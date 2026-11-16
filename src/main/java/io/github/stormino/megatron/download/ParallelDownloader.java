@@ -9,6 +9,7 @@ import io.github.stormino.megatron.mega.MegaMac;
 import io.github.stormino.megatron.mega.ResolvedFile;
 import io.github.stormino.megatron.proxy.ProxyInfo;
 import io.github.stormino.megatron.proxy.ProxyPool;
+import io.github.stormino.megatron.util.FileNames;
 import io.github.stormino.megatron.util.Threads;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -90,6 +91,15 @@ public final class ParallelDownloader {
      * @throws MegaApiException           if Mega refused the link (not found, taken down, ...)
      */
     public DownloadResult download(String url, Path outputDir, DownloadListener listener, DownloadControl control) {
+        return download(url, outputDir, null, listener, control);
+    }
+
+    /**
+     * Like {@link #download(String, Path, DownloadListener, DownloadControl)}, saving the file as
+     * {@code fileName} (sanitized) instead of the name stored on Mega; {@code null} keeps Mega's name.
+     */
+    public DownloadResult download(String url, Path outputDir, String fileName, DownloadListener listener,
+                                   DownloadControl control) {
         if (!MegaLinks.isDownloadable(url)) {
             throw new MegaApiException(MegaLinks.isFolderLink(url)
                     ? "Folder links must be expanded first: " + url
@@ -97,7 +107,7 @@ public final class ParallelDownloader {
         }
         DownloadListener l = listener == null ? DownloadListener.NONE : listener;
         DownloadControl c = control == null ? new DownloadControl() : control;
-        return new Transfer(url, outputDir, l, c).run();
+        return new Transfer(url, outputDir, fileName, l, c).run();
     }
 
     /** Resolves a link, rotating proxies on network failures. */
@@ -150,6 +160,7 @@ public final class ParallelDownloader {
     private final class Transfer {
         private final String url;
         private final Path outputDir;
+        private final String targetName;
         private final DownloadListener listener;
         private final DownloadControl control;
         private final AtomicBoolean abort = new AtomicBoolean();
@@ -161,9 +172,10 @@ public final class ParallelDownloader {
         private ResolvedFile file;
         private Path part;
 
-        Transfer(String url, Path outputDir, DownloadListener listener, DownloadControl control) {
+        Transfer(String url, Path outputDir, String targetName, DownloadListener listener, DownloadControl control) {
             this.url = url;
             this.outputDir = outputDir;
+            this.targetName = targetName;
             this.listener = listener;
             this.control = control;
         }
@@ -185,13 +197,15 @@ public final class ParallelDownloader {
                 throw new DownloadCancelledException("Cancelled while resolving " + url);
             }
             cdnUrl = file.cdnUrl();
-            Path finalPath = outputDir.resolve(file.fileName()).normalize();
+            String name = targetName == null || targetName.isBlank()
+                    ? file.fileName() : FileNames.sanitizeFileName(targetName, file.fileName());
+            Path finalPath = outputDir.resolve(name).normalize();
             if (!outputDir.toAbsolutePath().normalize().equals(finalPath.toAbsolutePath().getParent())) {
-                throw new DownloadException("Refusing unsafe file name: " + file.fileName());
+                throw new DownloadException("Refusing unsafe file name: " + name);
             }
             part = finalPath.resolveSibling(finalPath.getFileName() + ".part");
             log.info("Resolved {} -> {} ({} bytes)", url, file.fileName(), file.size());
-            listener.onResolved(url, file.fileName(), file.size(), finalPath);
+            listener.onResolved(url, name, file.size(), finalPath);
 
             if (settings.skipExisting() && Files.isRegularFile(finalPath) && !Files.exists(part)
                     && sizeOf(finalPath) == file.size()) {
