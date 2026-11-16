@@ -7,7 +7,7 @@
 
     <groupId>io.github.stormino</groupId>
     <artifactId>megatron</artifactId>
-    <version>0.2.1-SNAPSHOT</version><!-- project-version: managed by the Release workflow -->
+    <version>1.0.0</version><!-- project-version: managed by the Release workflow -->
     <packaging>jar</packaging>
 
     <name>Megatron</name>
