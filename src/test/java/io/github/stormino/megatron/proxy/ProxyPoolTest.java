@@ -125,6 +125,48 @@ class ProxyPoolTest {
         assertEquals(Set.of(p(2), p(4)), seen);
     }
 
+    private static ProxyInfo behind(int n, String exit) {
+        ProxyInfo p = p(n);
+        p.exitIp(exit);
+        return p;
+    }
+
+    @Test
+    void proxiesSharingAnExitCountOnceAndAlternateWithOtherExits() {
+        ProxyPool pool = pool(null);
+        pool.addAll(List.of(behind(1, "7.7.7.7"), behind(2, "7.7.7.7"), behind(3, "7.7.7.7"), behind(4, "8.8.8.8")));
+        assertEquals(2, pool.size(), "two distinct exits");
+        assertEquals(4, pool.proxyCount());
+        // Without grouping, the 3-proxy cluster would get 3 of every 4 picks.
+        int cluster = 0;
+        Set<ProxyInfo> clusterMembers = new HashSet<>();
+        for (int i = 0; i < 12; i++) {
+            ProxyInfo next = pool.next();
+            if ("7.7.7.7".equals(next.exitIp())) {
+                cluster++;
+                clusterMembers.add(next);
+            }
+        }
+        assertEquals(6, cluster, "exits are picked evenly");
+        assertEquals(3, clusterMembers.size(), "members of a group still rotate");
+    }
+
+    @Test
+    void cooldownBenchesTheWholeExitGroup() {
+        ProxyPool pool = pool(null);
+        pool.addAll(List.of(behind(1, "7.7.7.7"), behind(2, "7.7.7.7"), behind(3, "8.8.8.8")));
+        pool.cooldown(p(1), Duration.ofSeconds(90));
+        assertEquals(1, pool.size());
+        for (int i = 0; i < 5; i++) {
+            assertEquals("8.8.8.8", pool.next().exitIp());
+        }
+        // A dead front end does not kill the rest of its group.
+        now.addAndGet(Duration.ofSeconds(91).toNanos());
+        pool.penalize(p(1), true);
+        assertEquals(2, pool.size());
+        assertEquals(2, pool.proxyCount());
+    }
+
     @Test
     void exportForCacheSkipsDead() {
         ProxyPool pool = pool(null);

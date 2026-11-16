@@ -144,7 +144,7 @@ public final class Megatron implements AutoCloseable {
                 }
             }
             warmedUp = true;
-            log.info("Megatron ready: {} proxies alive", pool.size());
+            log.info("Megatron ready: {} proxies alive, {} distinct exit IPs", pool.proxyCount(), pool.size());
         }
     }
 

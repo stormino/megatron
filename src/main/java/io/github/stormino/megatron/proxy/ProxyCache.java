@@ -67,6 +67,9 @@ public final class ProxyCache {
                     if (e.path("latency_ms").isInt()) {
                         p.latencyMs(e.get("latency_ms").asInt());
                     }
+                    if (e.path("exit_ip").isTextual()) {
+                        p.exitIp(e.get("exit_ip").asText());
+                    }
                     out.add(p);
                 } catch (IllegalArgumentException ignored) {
                     // malformed entry
@@ -95,6 +98,9 @@ public final class ProxyCache {
             }
             if (p.latencyMs() != null) {
                 e.put("latency_ms", p.latencyMs());
+            }
+            if (p.exitIp() != null) {
+                e.put("exit_ip", p.exitIp());
             }
             e.put("last_seen", now);
         }

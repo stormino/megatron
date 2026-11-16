@@ -23,6 +23,7 @@ public final class ProxyInfo {
     private volatile Double throughputBps;
     private volatile Double uptimePercent;
     private volatile Integer cachedScore;
+    private volatile String exitIp;
 
     public ProxyInfo(String host, int port, ProxyProtocol protocol) {
         this(host, port, protocol, null, null, null);
@@ -133,6 +134,25 @@ public final class ProxyInfo {
 
     public void cachedScore(Integer cachedScore) {
         this.cachedScore = cachedScore;
+    }
+
+    /**
+     * Public IP address that traffic through this proxy comes from, as measured by the validator,
+     * or {@code null} if unknown. Many free proxies are front ends of the same exit; the pool
+     * groups them by this value because Mega's quota is per IP.
+     */
+    public String exitIp() {
+        return exitIp;
+    }
+
+    public void exitIp(String exitIp) {
+        this.exitIp = exitIp;
+    }
+
+    /** Grouping key: the exit IP when known, otherwise the proxy itself. */
+    public String exitKey() {
+        String ip = exitIp;
+        return ip != null ? "exit:" + ip : "proxy:" + key();
     }
 
     /** Proxy URL, e.g. {@code socks5h://1.2.3.4:1080}. Credentials are not included. */

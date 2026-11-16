@@ -72,7 +72,8 @@ public final class MegatronCli {
         try (Megatron megatron = builder.build()) {
             System.err.println("Preparing proxy pool...");
             megatron.warmUp();
-            System.err.printf("%n%d proxies ready%n", megatron.pool().size());
+            System.err.printf("%n%d proxies ready (%d distinct exit IPs)%n", megatron.pool().proxyCount(),
+                    megatron.pool().size());
             BatchResult result = megatron.downloadAll(urls, out, new ConsoleListener(megatron), control);
             System.err.println();
             for (DownloadResult r : result.completed()) {
@@ -118,7 +119,7 @@ public final class MegatronCli {
         @Override
         public void onProgress(String url, long bytesDone, long totalBytes, double bytesPerSecond) {
             double pct = totalBytes == 0 ? 100 : bytesDone * 100.0 / totalBytes;
-            System.err.printf(Locale.ROOT, "\r  %5.1f%%  %s / %s  %s/s  proxies: %d   ", pct, human(bytesDone),
+            System.err.printf(Locale.ROOT, "\r  %5.1f%%  %s / %s  %s/s  exits: %d   ", pct, human(bytesDone),
                     human(totalBytes), human(bytesPerSecond), megatron.pool().size());
         }
     }

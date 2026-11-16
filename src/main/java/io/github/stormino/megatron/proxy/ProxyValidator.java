@@ -26,8 +26,10 @@ import java.util.function.Predicate;
  * <ol>
  *   <li><b>alive</b>: fast pre-filter on a lightweight connectivity endpoint (high concurrency,
  *       short timeout). Measures latency.</li>
- *   <li><b>mega</b>: can the proxy reach Mega's API host? Any HTTP response counts as success.
- *       Stops early once {@code targetAlive} proxies passed.</li>
+ *   <li><b>mega</b>: can the proxy reach Mega's API host? Any HTTPS response counts as success.
+ *       Each passing proxy then gets its exit IP measured (an IP echo service over HTTPS); proxies
+ *       exiting from our own IP are transparent and dropped. Stops early once {@code targetAlive}
+ *       distinct exit IPs passed.</li>
  *   <li><b>speed</b> (optional): real download of a test file; proxies below the admission
  *       threshold are dropped, the others get a pre-measured throughput.</li>
  * </ol>
@@ -37,26 +39,48 @@ public final class ProxyValidator {
     private static final Logger log = LoggerFactory.getLogger(ProxyValidator.class);
 
     /** Validation tunables. */
+    /**
+     * @param targetAlive  early stop of the Mega stage after this many distinct exit IPs (0 = test all)
+     * @param exitIpCheck  measure each proxy's exit IP (pool grouping) and drop transparent proxies
+     * @param exitIpUrl    HTTPS endpoint answering with the caller's IP as plain text
+     */
     public record Settings(String aliveUrl, Duration aliveTimeout, int aliveWorkers,
                            String megaUrl, Duration megaTimeout, int megaWorkers, int targetAlive,
                            boolean speedTest, String speedTestUrl, long speedTestBytes, Duration speedTestTimeout,
-                           int speedTestWorkers, long speedAdmissionBps) {
+                           int speedTestWorkers, long speedAdmissionBps,
+                           boolean exitIpCheck, String exitIpUrl, Duration exitIpTimeout) {
         public static Settings defaults() {
             return new Settings(
                     "http://www.gstatic.com/generate_204", Duration.ofSeconds(4), 200,
                     "https://g.api.mega.co.nz/cs", Duration.ofSeconds(8), 120, 300,
                     false, "http://speedtest.tele2.net/1MB.zip", 1024 * 1024, Duration.ofSeconds(15), 30,
-                    100 * 1024);
+                    100 * 1024,
+                    true, "https://api.ipify.org", Duration.ofSeconds(8));
         }
 
         public Settings withSpeedTest(boolean enabled) {
             return new Settings(aliveUrl, aliveTimeout, aliveWorkers, megaUrl, megaTimeout, megaWorkers, targetAlive,
-                    enabled, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps);
+                    enabled, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps,
+                    exitIpCheck, exitIpUrl, exitIpTimeout);
         }
 
         public Settings withTargetAlive(int target) {
             return new Settings(aliveUrl, aliveTimeout, aliveWorkers, megaUrl, megaTimeout, megaWorkers, target,
-                    speedTest, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps);
+                    speedTest, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps,
+                    exitIpCheck, exitIpUrl, exitIpTimeout);
+        }
+
+        public Settings withExitIpCheck(boolean enabled) {
+            return new Settings(aliveUrl, aliveTimeout, aliveWorkers, megaUrl, megaTimeout, megaWorkers, targetAlive,
+                    speedTest, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps,
+                    enabled, exitIpUrl, exitIpTimeout);
+        }
+
+        /** Same settings with every endpoint replaced (tests, private mirrors). */
+        public Settings withUrls(String alive, String mega, String exitIp) {
+            return new Settings(alive, aliveTimeout, aliveWorkers, mega, megaTimeout, megaWorkers, targetAlive,
+                    speedTest, speedTestUrl, speedTestBytes, speedTestTimeout, speedTestWorkers, speedAdmissionBps,
+                    exitIpCheck, exitIp, exitIpTimeout);
         }
     }
 
@@ -66,8 +90,12 @@ public final class ProxyValidator {
         void onProgress(String stage, int done, int total, int alive);
     }
 
+    private static final java.util.regex.Pattern IP = java.util.regex.Pattern.compile("[0-9A-Fa-f:.]{2,45}");
+
     private final HttpClientFactory http;
     private final Settings settings;
+    /** Our own public IP, to recognise transparent proxies; {@code null} if unknown. */
+    private volatile String ownIp;
 
     public ProxyValidator(HttpClientFactory http) {
         this(http, Settings.defaults());
@@ -78,6 +106,11 @@ public final class ProxyValidator {
         this.settings = settings;
     }
 
+    /** Overrides the detected own public IP (tests, or callers that already know it). */
+    void ownIp(String ip) {
+        this.ownIp = ip;
+    }
+
     public List<ProxyInfo> validate(List<ProxyInfo> candidates) {
         return validate(candidates, null);
     }
@@ -85,6 +118,10 @@ public final class ProxyValidator {
     public List<ProxyInfo> validate(List<ProxyInfo> candidates, ProgressListener progress) {
         if (candidates.isEmpty()) {
             return List.of();
+        }
+        if (settings.exitIpCheck() && ownIp == null) {
+            ownIp = fetchIp(null);
+            log.info("Own public IP: {}", ownIp == null ? "unknown (transparent proxies cannot be detected)" : ownIp);
         }
         List<ProxyInfo> stage1 = runStage("alive", candidates, this::checkAlive, settings.aliveWorkers(), 0, progress);
         log.info("[alive] {}/{} proxies passed", stage1.size(), candidates.size());
@@ -95,7 +132,8 @@ public final class ProxyValidator {
         }
         List<ProxyInfo> stage2 = runStage("mega", stage1, this::checkMega, settings.megaWorkers(),
                 settings.targetAlive(), progress);
-        log.info("[mega] {}/{} proxies reach Mega", stage2.size(), stage1.size());
+        log.info("[mega] {}/{} proxies reach Mega, {} distinct exit IPs", stage2.size(), stage1.size(),
+                stage2.stream().map(ProxyInfo::exitKey).distinct().count());
         if (!settings.speedTest() || stage2.isEmpty()) {
             return stage2;
         }
@@ -117,6 +155,7 @@ public final class ProxyValidator {
                 owner.put(f, p);
             }
             List<ProxyInfo> alive = new ArrayList<>();
+            java.util.Set<String> exits = new java.util.HashSet<>();
             for (int done = 1; done <= proxies.size(); done++) {
                 Future<Boolean> f;
                 try {
@@ -135,14 +174,16 @@ public final class ProxyValidator {
                     break;
                 }
                 if (ok) {
-                    alive.add(owner.get(f));
+                    ProxyInfo p = owner.get(f);
+                    alive.add(p);
+                    exits.add(p.exitKey());
                 }
                 if (progress != null) {
                     progress.onProgress(name, done, proxies.size(), alive.size());
                 }
-                if (targetAlive > 0 && alive.size() >= targetAlive) {
-                    log.info("[{}] target {} reached after {}/{}, stopping early", name, targetAlive, done,
-                            proxies.size());
+                if (targetAlive > 0 && exits.size() >= targetAlive) {
+                    log.info("[{}] target of {} exit IPs reached after {}/{}, stopping early", name, targetAlive,
+                            done, proxies.size());
                     break;
                 }
             }
@@ -170,6 +211,37 @@ public final class ProxyValidator {
     }
 
     boolean checkMega(ProxyInfo proxy) {
+        if (!reachesMega(proxy)) {
+            return false;
+        }
+        if (!settings.exitIpCheck()) {
+            return true;
+        }
+        String exit = fetchIp(proxy);
+        proxy.exitIp(exit);
+        if (exit != null && exit.equals(ownIp)) {
+            log.debug("{} is transparent (exits from our own IP): dropped", proxy);
+            return false;
+        }
+        return true;
+    }
+
+    /** Public IP seen by the echo service through {@code proxy} ({@code null} = direct), or {@code null}. */
+    String fetchIp(ProxyInfo proxy) {
+        Request req = new Request.Builder().url(settings.exitIpUrl()).header("User-Agent", http.userAgent()).build();
+        try (Response resp = http.forProxy(proxy, settings.exitIpTimeout(), settings.exitIpTimeout(),
+                Duration.ZERO, false).newCall(req).execute()) {
+            if (!resp.isSuccessful() || resp.body() == null) {
+                return null;
+            }
+            String text = resp.body().string().strip();
+            return IP.matcher(text).matches() ? text : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean reachesMega(ProxyInfo proxy) {
         Request req = new Request.Builder().url(settings.megaUrl()).header("User-Agent", http.userAgent()).build();
         try (Response ignored = http.forProxy(proxy, settings.megaTimeout(), settings.megaTimeout(),
                 Duration.ZERO, false).newCall(req).execute()) {
