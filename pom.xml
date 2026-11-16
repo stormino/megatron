@@ -14,6 +14,22 @@
     <description>Java library for downloading public Mega.nz files and folders through a rotating pool of proxies, one proxy per chunk.</description>
     <url>https://github.com/stormino/megatron</url>
 
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>stormino</id>
+            <name>stormino</name>
+            <url>https://github.com/stormino</url>
+        </developer>
+    </developers>
+
     <scm>
         <url>https://github.com/stormino/megatron</url>
         <connection>scm:git:https://github.com/stormino/megatron.git</connection>
@@ -26,6 +42,8 @@
         <url>https://github.com/stormino/megatron/issues</url>
     </issueManagement>
 
+    <!-- Snapshots (CI, every push to main) go to GitHub Packages; releases go to Maven Central
+         through the "central" profile (see the Release workflow). -->
     <distributionManagement>
         <repository>
             <id>github</id>
@@ -182,6 +200,54 @@
     </build>
 
     <profiles>
+        <!-- mvn -Pcentral deploy: signs every artifact and uploads the bundle to the Central Portal.
+             Needs a "central" server (Portal user token) in settings.xml and a GPG key in the agent;
+             MAVEN_GPG_PASSPHRASE supplies its passphrase. -->
+        <profile>
+            <id>central</id>
+            <properties>
+                <!-- false: upload and validate only; the deployment is then dropped or published by hand. -->
+                <central.autoPublish>true</central.autoPublish>
+                <central.waitUntil>published</central.waitUntil>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <bestPractices>true</bestPractices>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.12.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>${central.autoPublish}</autoPublish>
+                            <waitUntil>${central.waitUntil}</waitUntil>
+                            <deploymentName>megatron ${project.version}</deploymentName>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- mvn -Pcli package -> target/megatron-*-cli.jar, runnable with java -jar -->
         <profile>
             <id>cli</id>
