@@ -21,10 +21,16 @@ public final class PoolRefresher implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(PoolRefresher.class);
 
-    /** Refresher tunables. */
+    /**
+     * Refresher tunables.
+     *
+     * <p>Defaults fit real free-proxy pools, which hold tens of usable proxies (a refill validates
+     * thousands of candidates, so it is expensive): refill when fewer than 8 are alive, never more
+     * than every 10 minutes, and otherwise every 6 hours to replace proxies that went stale.
+     */
     public record Settings(Duration interval, int low, int high, Duration minInterval, Duration maxInterval) {
         public static Settings defaults() {
-            return new Settings(Duration.ofSeconds(30), 80, 160, Duration.ofSeconds(45), Duration.ofSeconds(300));
+            return new Settings(Duration.ofMinutes(1), 8, 20, Duration.ofMinutes(10), Duration.ofHours(6));
         }
     }
 

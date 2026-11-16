@@ -29,8 +29,9 @@ It is a port of the ideas in
   chunks across distinct exits, and a rate limit benches the whole group.
 - **Scored pool.** Each success raises a proxy's score and each failure lowers it. Proxies that
   fall too low are dropped. When the CDN rate-limits a proxy (403/509), the proxy is benched for a
-  while instead of being killed. A background refresher refills the pool, with hysteresis so it
-  does not refill in a loop. Good proxies are saved to an on-disk cache so the next start is fast.
+  while instead of being killed. A background refresher refills the pool when fewer than 8
+  proxies are left (at most every 10 minutes) and tops it up every 6 hours, with hysteresis so
+  it does not refill in a loop. Good proxies are saved to an on-disk cache so the next start is fast.
 - **Parallel chunked download.** Fixed chunks of 32 MiB by default, fetched over 10 Range
   connections by default. Decryption uses AES-CTR and memory use stays constant. The file is
   written to `<name>.part` and atomically renamed when complete.
